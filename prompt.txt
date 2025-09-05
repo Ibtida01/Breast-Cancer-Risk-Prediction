@@ -1,0 +1,12 @@
+i am doing a research on breast cancer risk prediction.
+i have around 2 TB of total .dcim images (as dataset) and my metadata (.csv file) has these attributes:
+    anon_patientid,exam_year,anon_filename,x_age,x_case,x_cancer_laterality,x_type,x_lymphnode_met,rad_timing,rad_r1,rad_r2,rad_recall,rad_recall_type_right,rad_recall_type_left,imagelaterality,viewposition,libra_breastarea,libra_densearea,libra_percentdensity
+
+i want to use a transformer base model and train and tune that model and get results.
+i want the results as the tables in the images attached.
+
+i am going to use kaggle notebook to do this because they give access to 2x T4 GPUs.
+in https://www.kaggle.com/datasets/gschatten/breast-cancer-research-metadata i have "CSAW-CC_breast_cancer_screening_data.csv" metadata
+and in https://www.kaggle.com/datasets/gschatten/breast-cancer-research-dataset-batch-1-and-batch-2 i have total of 4121 .dcim images, which are kept in Batch_1/Batch_1 and Batch_2/Batch_2 directories of that dataset link
+
+now can you give me step by step process to preprocess the data and then train, test, and generate the required output

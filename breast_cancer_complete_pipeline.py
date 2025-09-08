@@ -84,8 +84,8 @@ class Config:
     IMAGES_PATH = "/kaggle/input/breast-cancer-research-dataset-batch-1-and-batch-2"
     
     # Training parameters
-    BATCH_SIZE = 8  # Reduce if OOM
-    NUM_EPOCHS = 30  # Increase for better results
+    BATCH_SIZE = 16  # Increased for better GPU utilization
+    NUM_EPOCHS = 20  # Reduced from 30 to 20
     LEARNING_RATE = 1e-4
     IMAGE_SIZE = 224
     
@@ -405,7 +405,15 @@ class MultimodalBreastCancerModel(nn.Module):
 def train_model(model, train_loader, val_loader, device):
     """Train the model"""
     print(f"\nTraining model on {device}...")
-    model.to(device)
+    
+    # Ensure model is on the correct device
+    model = model.to(device)
+    
+    # Print GPU memory info if using CUDA
+    if device.type == 'cuda':
+        print(f"GPU Memory before training:")
+        print(f"  Allocated: {torch.cuda.memory_allocated(device) / 1024**3:.2f} GB")
+        print(f"  Cached: {torch.cuda.memory_reserved(device) / 1024**3:.2f} GB")
     
     # Loss and optimizer
     criterion = nn.BCELoss()
@@ -434,27 +442,48 @@ def train_model(model, train_loader, val_loader, device):
                 
             optimizer.zero_grad()
             
-            # Handle None values properly
-            image = batch['image'].to(device) if batch['image'] is not None else None
-            metadata = batch['metadata'].to(device) if batch['metadata'] is not None else None
+            # Handle None values properly and ensure GPU transfer
+            if batch['image'] is not None:
+                image = batch['image'].to(device, non_blocking=True)
+            else:
+                image = None
+                
+            if batch['metadata'] is not None:
+                metadata = batch['metadata'].to(device, non_blocking=True)
+            else:
+                metadata = None
             
             # Skip batch if image is None for image-only model
             if image is None:
                 continue
                 
+            # Ensure model is on GPU
+            if not next(model.parameters()).is_cuda and device.type == 'cuda':
+                model = model.to(device)
+                
+            # Monitor first few batches for debugging
+            if batch_idx < 3 and epoch == 0:
+                print(f"  Batch {batch_idx}: Image shape {image.shape if image is not None else 'None'}, "
+                      f"Metadata shape {metadata.shape if metadata is not None else 'None'}")
+                if device.type == 'cuda':
+                    print(f"  Batch {batch_idx}: GPU Mem = {torch.cuda.memory_allocated(device) / 1024**3:.2f} GB")
+                
             outputs = model(image=image, metadata=metadata)
             
-            # Calculate loss
+            # Calculate loss with proper GPU handling
             total_loss = 0
+            loss_count = 0
             for horizon in outputs.keys():
                 if horizon in batch['targets']:
-                    target = batch['targets'][horizon].to(device)
+                    target = batch['targets'][horizon].to(device, non_blocking=True)
                     loss = criterion(outputs[horizon].squeeze(), target)
                     total_loss += loss
+                    loss_count += 1
             
-            total_loss.backward()
-            optimizer.step()
-            train_loss += total_loss.item()
+            if loss_count > 0:
+                total_loss.backward()
+                optimizer.step()
+                train_loss += total_loss.item()
         
         # Validation phase
         model.eval()
@@ -468,9 +497,16 @@ def train_model(model, train_loader, val_loader, device):
                 if batch is None:
                     continue
                     
-                # Handle None values properly
-                image = batch['image'].to(device) if batch['image'] is not None else None
-                metadata = batch['metadata'].to(device) if batch['metadata'] is not None else None
+                # Handle None values properly with GPU transfer
+                if batch['image'] is not None:
+                    image = batch['image'].to(device, non_blocking=True)
+                else:
+                    image = None
+                    
+                if batch['metadata'] is not None:
+                    metadata = batch['metadata'].to(device, non_blocking=True)
+                else:
+                    metadata = None
                 
                 # Skip batch if image is None for image-only model
                 if image is None:
@@ -481,12 +517,12 @@ def train_model(model, train_loader, val_loader, device):
                 batch_val_loss = 0
                 for horizon in outputs.keys():
                     if horizon in batch['targets']:
-                        target = batch['targets'][horizon].to(device)
+                        target = batch['targets'][horizon].to(device, non_blocking=True)
                         loss = criterion(outputs[horizon].squeeze(), target)
                         batch_val_loss += loss
                         
-                        val_predictions[horizon].extend(outputs[horizon].squeeze().cpu().numpy())
-                        val_targets[horizon].extend(target.cpu().numpy())
+                        val_predictions[horizon].extend(outputs[horizon].squeeze().detach().cpu().numpy())
+                        val_targets[horizon].extend(target.detach().cpu().numpy())
                 
                 val_loss += batch_val_loss.item()
         
@@ -513,14 +549,22 @@ def train_model(model, train_loader, val_loader, device):
         history['train_loss'].append(train_loss / len(train_loader))
         history['val_loss'].append(val_loss / len(val_loader))
         
-        # Print progress
+        # Print progress with GPU monitoring (every epoch for better tracking)
         epoch_time = time.time() - start_time
-        if epoch % 5 == 0:
+        if epoch % 1 == 0:  # Print every epoch for 20-epoch run
             print(f"Epoch {epoch+1}/{config.NUM_EPOCHS} ({epoch_time:.1f}s)")
             print(f"  Train Loss: {train_loss/len(train_loader):.4f}")
             print(f"  Val Loss: {val_loss/len(val_loader):.4f}")
             for horizon, auc in val_aucs.items():
                 print(f"  {horizon} AUC: {auc:.4f}")
+            
+            # Print GPU memory usage if using CUDA
+            if device.type == 'cuda':
+                gpu_memory = torch.cuda.memory_allocated(device) / 1024**3
+                gpu_cached = torch.cuda.memory_reserved(device) / 1024**3
+                gpu_util = (gpu_memory / 16.0) * 100  # T4 has 16GB
+                print(f"  GPU Memory: {gpu_memory:.2f}/{16:.0f} GB ({gpu_util:.1f}% utilized)")
+            print("-" * 50)
     
     # Load best model
     if best_model_state is not None:
@@ -544,9 +588,16 @@ def evaluate_model(model, test_loader, device):
             if batch is None:
                 continue
                 
-            # Handle None values properly
-            image = batch['image'].to(device) if batch['image'] is not None else None
-            metadata = batch['metadata'].to(device) if batch['metadata'] is not None else None
+            # Handle None values properly with GPU transfer
+            if batch['image'] is not None:
+                image = batch['image'].to(device, non_blocking=True)
+            else:
+                image = None
+                
+            if batch['metadata'] is not None:
+                metadata = batch['metadata'].to(device, non_blocking=True)
+            else:
+                metadata = None
             
             # Skip batch if image is None
             if image is None:
@@ -556,8 +607,8 @@ def evaluate_model(model, test_loader, device):
             
             for horizon in outputs.keys():
                 if horizon in batch['targets']:
-                    predictions[horizon].extend(outputs[horizon].squeeze().cpu().numpy())
-                    targets[horizon].extend(batch['targets'][horizon].cpu().numpy())
+                    predictions[horizon].extend(outputs[horizon].squeeze().detach().cpu().numpy())
+                    targets[horizon].extend(batch['targets'][horizon].detach().cpu().numpy())
             
             patient_ids.extend(batch['patient_id'])
     
@@ -679,10 +730,8 @@ def main():
     
     target_columns = ['cancer_1year', 'cancer_2year', 'cancer_3year', 'cancer_4year']
     
-    # Model configurations for ablation study
+    # Model configurations - ONLY MULTIMODAL MODEL
     model_configs = {
-        'Image-Only': {'use_image': True, 'use_metadata': False},
-        'Metadata-Only': {'use_image': False, 'use_metadata': True},
         'Multimodal': {'use_image': True, 'use_metadata': True}
     }
     
@@ -695,9 +744,27 @@ def main():
     
     print(f"Number of metadata features: {num_metadata_features}")
     
-    # Device
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
+    # Device with explicit GPU selection and forced CUDA usage
+    if torch.cuda.is_available():
+        device = torch.device('cuda:0')  # Explicitly use first GPU
+        torch.cuda.set_device(0)  # Set current device
+        print(f"Using device: {device}")
+        print(f"Current CUDA device: {torch.cuda.current_device()}")
+        print(f"GPU Name: {torch.cuda.get_device_name(0)}")
+        
+        # Test GPU with a simple operation
+        print("Testing GPU with simple tensor operation...")
+        test_tensor = torch.randn(1000, 1000).to(device)
+        result = torch.mm(test_tensor, test_tensor)
+        print(f"GPU test successful! Result shape: {result.shape}")
+        print(f"GPU Memory after test: {torch.cuda.memory_allocated(device) / 1024**3:.2f} GB")
+        del test_tensor, result  # Clean up
+        torch.cuda.empty_cache()
+    else:
+        print("ERROR: CUDA is not available! This will run very slowly on CPU.")
+        device = torch.device('cpu')
+        print(f"Using device: {device}")
+        return  # Exit if no CUDA
     
     # Storage for results
     all_metrics = {}
@@ -706,8 +773,9 @@ def main():
     # Train and evaluate each model configuration
     for model_name, config_dict in model_configs.items():
         print(f"\n{'='*60}")
-        print(f"TRAINING {model_name.upper()} MODEL")
+        print(f"TRAINING {model_name.upper()} MODEL (20 EPOCHS)")
         print(f"{'='*60}")
+        print(f"Configuration: Image={config_dict['use_image']}, Metadata={config_dict['use_metadata']}")
         
         # Create datasets
         train_dataset = BreastCancerDataset(
@@ -725,22 +793,41 @@ def main():
             include_metadata=config_dict['use_metadata']
         )
         
-        # Create data loaders with custom collate function
+        # Create data loaders with proper GPU utilization
         train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True, 
-                                num_workers=0, drop_last=True, collate_fn=custom_collate)
+                                num_workers=2, pin_memory=True, drop_last=True, collate_fn=custom_collate)
         val_loader = DataLoader(val_dataset, batch_size=config.BATCH_SIZE, shuffle=False, 
-                              num_workers=0, drop_last=True, collate_fn=custom_collate)
+                              num_workers=2, pin_memory=True, drop_last=True, collate_fn=custom_collate)
         test_loader = DataLoader(test_dataset, batch_size=config.BATCH_SIZE, shuffle=False, 
-                                num_workers=0, drop_last=True, collate_fn=custom_collate)
+                                num_workers=2, pin_memory=True, drop_last=True, collate_fn=custom_collate)
         
-        # Initialize model
+        # Initialize model and FORCE it to GPU
         model = MultimodalBreastCancerModel(
             num_metadata_features=num_metadata_features,
             use_image=config_dict['use_image'],
             use_metadata=config_dict['use_metadata']
         )
         
+        # Explicitly move model to GPU and verify
+        model = model.to(device)
+        if device.type == 'cuda':
+            model = model.cuda()  # Double ensure it's on GPU
+        
         print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+        
+        # Verify model is on GPU
+        if device.type == 'cuda':
+            print(f"Model device check: {next(model.parameters()).device}")
+            print(f"GPU Memory after model load: {torch.cuda.memory_allocated(device) / 1024**3:.2f} GB")
+            
+            # Force a forward pass to ensure GPU usage
+            dummy_input = torch.randn(1, 3, 224, 224).to(device)
+            dummy_metadata = torch.randn(1, num_metadata_features).to(device)
+            with torch.no_grad():
+                _ = model(image=dummy_input, metadata=dummy_metadata)
+            print(f"GPU Memory after dummy forward pass: {torch.cuda.memory_allocated(device) / 1024**3:.2f} GB")
+            del dummy_input, dummy_metadata
+            torch.cuda.empty_cache()
         
         # Train model
         trained_model, history = train_model(model, train_loader, val_loader, device)

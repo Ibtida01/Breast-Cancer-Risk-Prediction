@@ -1,0 +1,195 @@
+================================================================================
+BREAST CANCER RISK PREDICTION USING TRANSFORMER MODEL
+================================================================================
+Start time: 2025-09-06 17:20:46
+PyTorch version: 2.6.0+cu124
+CUDA available: True
+Number of GPUs: 2
+GPU 0: Tesla T4
+GPU 1: Tesla T4
+
+==================================================
+LOADING AND PREPROCESSING METADATA
+==================================================
+Original dataset shape: (98788, 19)
+Columns: ['anon_patientid', 'exam_year', 'anon_filename', 'x_age', 'x_case', 'x_cancer_laterality', 'x_type', 'x_lymphnode_met', 'rad_timing', 'rad_r1', 'rad_r2', 'rad_recall', 'rad_recall_type_right', 'rad_recall_type_left', 'imagelaterality', 'viewposition', 'libra_breastarea', 'libra_densearea', 'libra_percentdensity']
+
+Handling missing values...
+  x_age: filled 0 missing values with median 1.00
+  libra_breastarea: filled 0 missing values with median 155.45
+  libra_densearea: filled 0 missing values with median 30.74
+  libra_percentdensity: filled 0 missing values with median 21.52
+  x_cancer_laterality: filled 91484 missing values with 'Unknown'
+  x_type: filled 91632 missing values with 'Unknown'
+  x_lymphnode_met: filled 92032 missing values with 'Unknown'
+  rad_recall: filled 8016 missing values with 'Unknown'
+  rad_recall_type_right: filled 97264 missing values with 'Unknown'
+  rad_recall_type_left: filled 97064 missing values with 'Unknown'
+
+Creating target variables...
+  Primary cancer outcome: 7304 positive cases out of 98788
+  cancer_1year: 2887 positive cases
+  cancer_2year: 2148 positive cases
+  cancer_3year: 1467 positive cases
+  cancer_4year: 724 positive cases
+
+Encoding categorical variables...
+  x_cancer_laterality: encoded to x_cancer_laterality_encoded
+  x_type: encoded to x_type_encoded
+  x_lymphnode_met: encoded to x_lymphnode_met_encoded
+  rad_recall: encoded to rad_recall_encoded
+  rad_recall_type_right: encoded to rad_recall_type_right_encoded
+  rad_recall_type_left: encoded to rad_recall_type_left_encoded
+  imagelaterality: encoded to imagelaterality_encoded
+  viewposition: encoded to viewposition_encoded
+
+Mapping image file paths...
+Found images: 4121
+Missing images: 94667
+Final dataset shape after filtering: (4121, 33)
+
+Data splits:
+  Train: 2467 samples (173 patients)
+  Validation: 800 samples (58 patients)
+  Test: 854 samples (58 patients)
+Number of metadata features: 10
+Using device: cuda
+
+============================================================
+TRAINING IMAGE-ONLY MODEL
+============================================================
+model.safetensors: 100%
+ 346M/346M [00:01<00:00, 326MB/s]
+Model parameters: 86,324,740
+
+Training model on cuda...
+Epoch 1/30 (691.9s)
+  Train Loss: 0.3602
+  Val Loss: 0.6912
+  cancer_1year AUC: 0.5624
+  cancer_2year AUC: 0.5819
+  cancer_3year AUC: 0.5734
+  cancer_4year AUC: 0.5466
+Epoch 6/30 (686.0s)
+  Train Loss: 0.3195
+  Val Loss: 0.6312
+  cancer_1year AUC: 0.5524
+  cancer_2year AUC: 0.5835
+  cancer_3year AUC: 0.5541
+  cancer_4year AUC: 0.5945
+Epoch 11/30 (669.4s)
+  Train Loss: 0.3165
+  Val Loss: 0.7260
+  cancer_1year AUC: 0.4591
+  cancer_2year AUC: 0.4559
+  cancer_3year AUC: 0.4113
+  cancer_4year AUC: 0.5408
+Epoch 16/30 (674.4s)
+  Train Loss: 0.3051
+  Val Loss: 0.6562
+  cancer_1year AUC: 0.5248
+  cancer_2year AUC: 0.5493
+  cancer_3year AUC: 0.5395
+  cancer_4year AUC: 0.6478
+Epoch 21/30 (684.7s)
+  Train Loss: 0.3004
+  Val Loss: 0.6282
+  cancer_1year AUC: 0.5424
+  cancer_2year AUC: 0.5610
+  cancer_3year AUC: 0.5463
+  cancer_4year AUC: 0.5954
+Epoch 26/30 (694.2s)
+  Train Loss: 0.3033
+  Val Loss: 0.6196
+  cancer_1year AUC: 0.5486
+  cancer_2year AUC: 0.5912
+  cancer_3year AUC: 0.5875
+  cancer_4year AUC: 0.7359
+
+Evaluating model...
+
+Image-Only Test Results:
+----------------------------------------
+cancer_1year: AUC = 0.617 (95% CI: 0.494-0.739)
+cancer_2year: AUC = 0.575 (95% CI: 0.434-0.713)
+cancer_3year: AUC = 0.609 (95% CI: 0.419-0.793)
+cancer_4year: AUC = 0.548 (95% CI: 0.256-0.938)
+
+============================================================
+TRAINING METADATA-ONLY MODEL
+============================================================
+Model parameters: 175,300
+
+Training model on cuda...
+Epoch 1/30 (587.8s)
+  Train Loss: 0.9685
+  Val Loss: 0.4997
+  cancer_1year AUC: 0.9607
+  cancer_2year AUC: 0.9506
+  cancer_3year AUC: 0.9422
+  cancer_4year AUC: 0.9381
+Epoch 6/30 (607.6s)
+  Train Loss: 0.1300
+  Val Loss: 0.2851
+  cancer_1year AUC: 0.9599
+  cancer_2year AUC: 0.9574
+  cancer_3year AUC: 0.9497
+  cancer_4year AUC: 0.9279
+Epoch 11/30 (594.1s)
+  Train Loss: 0.1213
+  Val Loss: 0.2909
+  cancer_1year AUC: 0.9586
+  cancer_2year AUC: 0.9586
+  cancer_3year AUC: 0.9506
+  cancer_4year AUC: 0.9233
+Epoch 16/30 (590.1s)
+  Train Loss: 0.1189
+  Val Loss: 0.2898
+  cancer_1year AUC: 0.9595
+  cancer_2year AUC: 0.9556
+  cancer_3year AUC: 0.9461
+  cancer_4year AUC: 0.9112
+Epoch 21/30 (594.7s)
+  Train Loss: 0.1120
+  Val Loss: 0.2910
+  cancer_1year AUC: 0.9594
+  cancer_2year AUC: 0.9557
+  cancer_3year AUC: 0.9469
+  cancer_4year AUC: 0.9097
+Epoch 26/30 (590.8s)
+  Train Loss: 0.1139
+  Val Loss: 0.2918
+  cancer_1year AUC: 0.9591
+  cancer_2year AUC: 0.9559
+  cancer_3year AUC: 0.9482
+  cancer_4year AUC: 0.9109
+
+Evaluating model...
+
+Metadata-Only Test Results:
+----------------------------------------
+cancer_1year: AUC = 0.987 (95% CI: 0.978-0.993)
+cancer_2year: AUC = 0.991 (95% CI: 0.983-0.996)
+cancer_3year: AUC = 0.990 (95% CI: 0.980-0.998)
+cancer_4year: AUC = 0.986 (95% CI: 0.967-1.000)
+
+============================================================
+TRAINING MULTIMODAL MODEL
+============================================================
+Model parameters: 86,367,172
+
+Training model on cuda...
+Epoch 1/30 (626.2s)
+  Train Loss: 0.3566
+  Val Loss: 0.6526
+  cancer_1year AUC: 0.9614
+  cancer_2year AUC: 0.9587
+  cancer_3year AUC: 0.9543
+  cancer_4year AUC: 0.9250
+Epoch 6/30 (599.3s)
+  Train Loss: 0.1252
+  Val Loss: 0.2881
+  cancer_1year AUC: 0.9594
+  cancer_2year AUC: 0.9524
+  cancer_3year AUC: 0.9436
+  cancer_4year AUC: 0.9243

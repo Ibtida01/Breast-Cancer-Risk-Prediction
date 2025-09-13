@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import warnings
 import numpy as np
 import pandas as pd
@@ -46,9 +47,9 @@ class Config:
     DROPOUT = 0.1
     
     # Training parameters
-    BATCH_SIZE = 8
-    LEARNING_RATE = 1e-4
-    NUM_EPOCHS = 30
+    BATCH_SIZE = 16  # Increased for faster training
+    LEARNING_RATE = 2e-4  # Slightly higher learning rate
+    NUM_EPOCHS = 5  # Reduced for quick testing - change back to 30 for full run
     WEIGHT_DECAY = 0.01
     
     # History settings
@@ -83,36 +84,86 @@ class DICOMProcessor:
         ])
     
     def load_dicom(self, file_path: str) -> Optional[torch.Tensor]:
-        """Load and preprocess a DICOM file."""
+        """Load and preprocess a DICOM file with robust error handling."""
         try:
-            # Load DICOM file
-            dicom = pydicom.dcmread(file_path)
-            
-            # Get pixel array
-            if hasattr(dicom, 'pixel_array'):
-                pixel_array = dicom.pixel_array
-            else:
-                logger.warning(f"No pixel array in {file_path}")
+            # Check if file exists and is readable
+            if not os.path.exists(file_path):
+                logger.warning(f"DICOM file not found: {file_path}")
                 return None
             
-            # Normalize to 0-255 range
-            pixel_array = pixel_array.astype(np.float32)
-            pixel_array = (pixel_array - pixel_array.min()) / (pixel_array.max() - pixel_array.min() + 1e-8)
-            pixel_array = (pixel_array * 255).astype(np.uint8)
+            # Check file size
+            try:
+                file_size = os.path.getsize(file_path)
+                if file_size == 0:
+                    logger.warning(f"Empty DICOM file: {file_path}")
+                    return None
+                if file_size < 1024:  # Files smaller than 1KB are likely corrupted
+                    logger.warning(f"Suspiciously small DICOM file ({file_size} bytes): {file_path}")
+                    return None
+            except (OSError, IOError):
+                logger.warning(f"Cannot access DICOM file: {file_path}")
+                return None
+            
+            # Load DICOM file with timeout protection
+            try:
+                dicom = pydicom.dcmread(file_path, force=True)
+            except Exception as e:
+                logger.warning(f"Failed to read DICOM file {file_path}: {e}")
+                return None
+            
+            # Get pixel array
+            if not hasattr(dicom, 'pixel_array'):
+                logger.warning(f"No pixel array in DICOM file: {file_path}")
+                return None
+            
+            try:
+                pixel_array = dicom.pixel_array
+            except Exception as e:
+                logger.warning(f"Cannot access pixel array in {file_path}: {e}")
+                return None
+            
+            # Validate pixel array
+            if pixel_array is None or pixel_array.size == 0:
+                logger.warning(f"Empty pixel array in {file_path}")
+                return None
+            
+            # Check dimensions
+            if len(pixel_array.shape) < 2:
+                logger.warning(f"Invalid pixel array dimensions in {file_path}: {pixel_array.shape}")
+                return None
+            
+            # Normalize to 0-255 range safely
+            try:
+                pixel_array = pixel_array.astype(np.float32)
+                pixel_min, pixel_max = pixel_array.min(), pixel_array.max()
+                
+                if pixel_max == pixel_min:
+                    logger.warning(f"Constant pixel values in {file_path}")
+                    return None
+                
+                pixel_array = (pixel_array - pixel_min) / (pixel_max - pixel_min + 1e-8)
+                pixel_array = (pixel_array * 255).astype(np.uint8)
+            except Exception as e:
+                logger.warning(f"Error normalizing pixel array in {file_path}: {e}")
+                return None
             
             # Convert to PIL Image and apply transforms
-            if len(pixel_array.shape) == 2:
-                # Convert grayscale to RGB
-                image = Image.fromarray(pixel_array).convert('RGB')
-            else:
-                image = Image.fromarray(pixel_array)
-            
-            # Apply transforms
-            tensor = self.transform(image)
-            return tensor
+            try:
+                if len(pixel_array.shape) == 2:
+                    # Convert grayscale to RGB
+                    image = Image.fromarray(pixel_array).convert('RGB')
+                else:
+                    image = Image.fromarray(pixel_array)
+                
+                # Apply transforms
+                tensor = self.transform(image)
+                return tensor
+            except Exception as e:
+                logger.warning(f"Error applying transforms to {file_path}: {e}")
+                return None
             
         except Exception as e:
-            logger.error(f"Error loading DICOM {file_path}: {e}")
+            logger.error(f"Unexpected error loading DICOM {file_path}: {e}")
             return None
 
 class DataProcessor:
@@ -144,13 +195,35 @@ class DataProcessor:
         logger.info(f"Loaded metadata: {len(df)} records, {df['anon_patientid'].nunique()} patients")
         return df
     
-    def create_visit_sequences(self, df: pd.DataFrame, history_years: int = 0) -> Dict:
+    def create_visit_sequences(self, df: pd.DataFrame, history_years: int = 0, test_mode: bool = False) -> Dict:
         """Create longitudinal visit sequences for each patient."""
+        
+        # For test mode, use only a subset of patients
+        if test_mode:
+            unique_patients = df['anon_patientid'].unique()[:500]  # Use first 500 patients
+            df = df[df['anon_patientid'].isin(unique_patients)]
+            print(f"🚀 TEST MODE: Using {len(unique_patients)} patients (subset)")
+        
+        print(f"🔄 Creating sequences for {len(df['anon_patientid'].unique())} patients...")
+        start_time = time.time()
         
         # Group by patient and create visit sequences
         patient_sequences = {}
+        processed_patients = 0
+        total_patients = len(df['anon_patientid'].unique())
         
         for patient_id, patient_data in df.groupby('anon_patientid'):
+            processed_patients += 1
+            
+            # Progress update every 100 patients
+            if processed_patients % 100 == 0:
+                elapsed = time.time() - start_time
+                rate = processed_patients / elapsed
+                eta = (total_patients - processed_patients) / rate
+                print(f"  Processed {processed_patients}/{total_patients} patients "
+                      f"({processed_patients/total_patients*100:.1f}%) - "
+                      f"Rate: {rate:.1f} patients/s - ETA: {eta:.1f}s")
+            
             # Sort by exam year
             patient_data = patient_data.sort_values('exam_year')
             
@@ -209,6 +282,8 @@ class DataProcessor:
                     'history_length': len(visit_data)
                 }
         
+        total_time = time.time() - start_time
+        print(f"✅ Sequence creation completed: {len(patient_sequences)} sequences in {total_time:.1f}s")
         logger.info(f"Created {len(patient_sequences)} sequences with {history_years} years history")
         return patient_sequences
     
@@ -229,21 +304,119 @@ class DataProcessor:
         return outcomes
     
     def find_image_paths(self) -> Dict[str, str]:
-        """Find all image file paths."""
+        """Find all image file paths with comprehensive error handling and progress monitoring."""
+        print(f"\nStarting DICOM file discovery...")
+        print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        start_time = datetime.now()
+        
         image_paths = {}
+        total_file_count = 0
+        total_dir_count = 0
+        total_error_count = 0
         
         # Search in both batch directories
         batch_dirs = ['Batch_1/Batch_1', 'Batch_2/Batch_2']
         
         for batch_dir in batch_dirs:
             batch_path = os.path.join(self.images_path, batch_dir)
-            if os.path.exists(batch_path):
+            print(f"\nProcessing batch: {batch_dir}")
+            print(f"Full path: {batch_path}")
+            
+            if not os.path.exists(batch_path):
+                print(f"WARNING: Directory not found: {batch_path}")
+                continue
+                
+            batch_file_count = 0
+            batch_dir_count = 0
+            batch_error_count = 0
+            batch_start = datetime.now()
+            
+            try:
                 for root, dirs, files in os.walk(batch_path):
+                    batch_dir_count += 1
+                    total_dir_count += 1
+                    
+                    # Progress update every 50 directories (more frequent for better feedback)
+                    if batch_dir_count % 50 == 0:
+                        elapsed = (datetime.now() - batch_start).total_seconds()
+                        print(f"  Scanning: {root}")
+                        print(f"  Progress: {batch_dir_count} dirs, {batch_file_count} files, {batch_error_count} errors ({elapsed:.1f}s)")
+                    
                     for file in files:
-                        if file.endswith('.dcm'):
-                            image_paths[file] = os.path.join(root, file)
+                        try:
+                            if file.lower().endswith(('.dcm', '.dicom')):
+                                file_path = os.path.join(root, file)
+                                
+                                # Verify file exists and is readable
+                                if not os.path.exists(file_path):
+                                    batch_error_count += 1
+                                    total_error_count += 1
+                                    continue
+                                
+                                # Check file size (skip empty files)
+                                try:
+                                    file_size = os.path.getsize(file_path)
+                                    if file_size == 0:
+                                        batch_error_count += 1
+                                        total_error_count += 1
+                                        continue
+                                except (OSError, IOError):
+                                    batch_error_count += 1
+                                    total_error_count += 1
+                                    continue
+                                
+                                # Store valid file
+                                image_paths[file] = file_path
+                                batch_file_count += 1
+                                total_file_count += 1
+                                
+                                # Progress update every 500 files (more frequent)
+                                if batch_file_count % 500 == 0:
+                                    elapsed = (datetime.now() - batch_start).total_seconds()
+                                    print(f"  Found {batch_file_count} valid DICOM files in {batch_dir} ({elapsed:.1f}s)")
+                                    
+                        except (OSError, IOError, PermissionError) as e:
+                            batch_error_count += 1
+                            total_error_count += 1
+                            if batch_error_count % 50 == 0:
+                                print(f"  Warning: {batch_error_count} file access errors in {batch_dir}")
+                            continue
+                            
+            except Exception as e:
+                print(f"CRITICAL ERROR scanning {batch_dir}: {e}")
+                batch_elapsed = (datetime.now() - batch_start).total_seconds()
+                print(f"Partial results for {batch_dir}: {batch_file_count} files before error ({batch_elapsed:.1f}s)")
+                continue
+            
+            # Batch completion summary
+            batch_elapsed = (datetime.now() - batch_start).total_seconds()
+            print(f"\nCompleted {batch_dir}:")
+            print(f"  Directories: {batch_dir_count}")
+            print(f"  Valid files: {batch_file_count}")
+            print(f"  Errors: {batch_error_count}")
+            print(f"  Time: {batch_elapsed:.1f} seconds")
         
-        logger.info(f"Found {len(image_paths)} DICOM images")
+        # Final summary
+        total_elapsed = (datetime.now() - start_time).total_seconds()
+        print(f"\n{'='*50}")
+        print(f"DICOM DISCOVERY COMPLETE")
+        print(f"{'='*50}")
+        print(f"Total directories processed: {total_dir_count}")
+        print(f"Total valid DICOM files found: {total_file_count}")
+        print(f"Total errors encountered: {total_error_count}")
+        print(f"Total elapsed time: {total_elapsed:.1f} seconds")
+        print(f"End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        if total_file_count == 0:
+            print(f"\nWARNING: No DICOM files found!")
+            print(f"Please verify:")
+            print(f"1. Base path exists: {self.images_path}")
+            print(f"2. Batch directories exist: {batch_dirs}")
+            print(f"3. Files have .dcm or .dicom extensions")
+            print(f"4. File permissions allow reading")
+        else:
+            print(f"\nSUCCESS: Found {total_file_count} valid DICOM files")
+        
         return image_paths
 
 class PositionalEncoding(nn.Module):
@@ -1065,8 +1238,13 @@ def plot_results(all_results: Dict[int, Dict], save_path: str = None):
 def main():
     """Main function to run the complete analysis."""
     
+    # QUICK TEST MODE - Change to False for full experiment
+    TEST_MODE = True
+    
     print("="*80)
     print("VISION TRANSFORMER FOR BREAST CANCER RISK PREDICTION")
+    if TEST_MODE:
+        print("🚀 RUNNING IN QUICK TEST MODE")
     print("="*80)
     print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"PyTorch version: {torch.__version__}")
@@ -1087,21 +1265,41 @@ def main():
     data_processor = DataProcessor(config.METADATA_PATH, config.IMAGES_PATH)
     
     # Load metadata and image paths
-    logger.info("Loading metadata and image paths...")
+    print("\n" + "="*50)
+    print("LOADING METADATA AND IMAGE PATHS")
+    print("="*50)
+    
+    print("📊 Loading metadata CSV file...")
+    start_time = time.time()
     df = data_processor.load_metadata()
+    metadata_time = time.time() - start_time
+    print(f"✅ Metadata loaded: {len(df)} records in {metadata_time:.1f}s")
+    
+    print("🔍 Finding image paths...")
+    start_time = time.time()
     image_paths = data_processor.find_image_paths()
+    paths_time = time.time() - start_time
+    print(f"✅ Image paths found: {len(image_paths)} files in {paths_time:.1f}s")
+    
+    print("\n🔄 Starting analysis for different history configurations...")
     
     # Store results for all history settings
     all_results = {}
     
     # Run analysis for different history settings
-    for history_years in range(0, config.MAX_HISTORY_YEARS + 1):
+    history_range = [0] if TEST_MODE else range(0, config.MAX_HISTORY_YEARS + 1)
+    
+    for history_years in history_range:
         logger.info(f"\n{'='*80}")
         logger.info(f"RUNNING ANALYSIS WITH {history_years} YEARS OF HISTORY")
         logger.info(f"{'='*80}")
         
         # Create sequences
-        sequences = data_processor.create_visit_sequences(df, history_years)
+        print(f"\n🔧 Creating visit sequences for {history_years} years of history...")
+        start_time = time.time()
+        sequences = data_processor.create_visit_sequences(df, history_years, test_mode=TEST_MODE)
+        sequence_time = time.time() - start_time
+        print(f"✅ Created {len(sequences)} sequences in {sequence_time:.1f}s")
         
         if not sequences:
             logger.warning(f"No valid sequences for history_years={history_years}")
